@@ -4,6 +4,7 @@ use rand;
 pub struct CPU {
     memory: Memory,
     vram: [[u8; 64]; 32],
+    vram_flag: bool,
     register: [u8; 16],
     pc: u16,
     i: u16,
@@ -11,6 +12,9 @@ pub struct CPU {
     delay_timer: u8,
     sound_timer: u8,
     sp: u8,
+    keypad: [bool; 16],
+    keypad_wait: bool,
+    k_v: u8,
 } 
 
 impl CPU {
@@ -18,13 +22,17 @@ impl CPU {
         CPU {
             memory: Memory::new(),
             vram: [[0; 64]; 32],
+            vram_flag: false,
             register: [0; 16],
             pc: 0x200,
             i: 0,
             stack: [0; 16],
             delay_timer: 0,
             sound_timer: 0,
-            sp: 0
+            sp: 0,
+            keypad: [false; 16],
+            keypad_wait: false,
+            k_v: 0
         }
     }
 
@@ -195,19 +203,51 @@ impl CPU {
                 self.register[vx_i] = random_value & mask;
             },
             0xD000 => {
-                let byte = instruction & 0xF;
-                let sprite = self.read_memory(self.i);
-                
+                let sprite_length = instruction & 0xF;
+
+                let vx = self.register[((instruction & 0x0F00) >> 8) as usize] as usize % 64;
+                let vy = self.register[((instruction & 0x00F0) >> 4) as usize] as usize % 32;
+                self.register[15] = 0;
+
+                for row in 0..sprite_length {
+                    let byte = self.read_memory(self.i + row);
+                    for col in 0..8 {
+                        let pixel = (byte >> (7 - col)) & 0x1;
+
+                        let current_pixel = self.vram[vx][vy];
+
+                        if pixel == 1 {
+                            if current_pixel == 1 {
+                                self.register[15] = 1;
+                            }
+                            self.vram[vx + col][vy + row as usize] ^= 1;
+                        }
+                    }
+                }
+                self.vram_flag = true;
+
 
             },
-            0xE000 => {},
+            0xE000 => {
+                let vx = self.register[((instruction & 0x0F00) >> 8) as usize];
+                let is_pressed = self.keypad[vx as usize];
+                match instruction & 0xFF {
+                    0x9E => {
+                        if is_pressed {self.pc += 2;}
+                    },
+                    0xA1 => {
+                        if !is_pressed {self.pc += 2;}
+                    },
+                    _ => panic!("not available!")
+                }
+            },
             0xF000 => {
                 let vx_i = ((instruction & 0x0F00) >> 8) as usize;
                 match instruction & 0xFF {
                     0x7 => {
                         self.register[vx_i] = self.delay_timer;
                     },
-                    0xA => {},
+                    0xA => {}, // WIP
                     0x15 => {
                         self.delay_timer = self.register[vx_i];
                     },
@@ -217,8 +257,15 @@ impl CPU {
                     0x1E => {
                         self.i += (self.register[vx_i] as u16);
                     },
-                    0x29 => {},
-                    0x33 => {},
+                    0x29 => {
+                        self.i = (self.register[vx_i] as u16) * 5;
+                    },
+                    0x33 => {
+                        let vx = self.register[vx_i];
+                        self.write_memory(self.i, vx / 100);
+                        self.write_memory(self.i + 1, (vx % 100) / 10 );
+                        self.write_memory(self.i + 2, vx % 10);
+                    },
                     0x55 => {
                         for i in 0..vx_i + 1 {
                             self.write_memory(self.i, self.register[i]);
